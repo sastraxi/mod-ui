@@ -3141,8 +3141,11 @@ class Host(object):
             diffBypass = (self.should_save_addressing_value(addressing, pluginData['bypassed']) and
                           pluginData['bypassed'] != data['bypassed'])
             diffPreset = data['preset'] and data['preset'] != pluginData['preset']
-            diffBpm = data['bpm'] and data['bpm'] != self.transport_bpm
-            diffBpb = data['bpb'] and data['bpb'] != self.transport_bpb
+
+            bpm = data.get('bpm')
+            diffBpm = bpm is not None and bpm != self.transport_bpm
+            bpb = data.get('bpb')
+            diffBpb = bpb is not None and bpb != self.transport_bpb
 
             if was_aborted or diffBypass:
                 if addressing is not None:
