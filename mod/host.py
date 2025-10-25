@@ -3699,7 +3699,8 @@ class Host(object):
             self.pedalboard_path     = ""
             self.pedalboard_size     = [0,0]
             self.pedalboard_version  = 0
-            self.midi_aggregated_mode = True
+            # Don't override MIDI mode for default pedalboards - use the mode from the pedalboard
+            # self.midi_aggregated_mode = True
             #save_last_bank_and_pedalboard(0, "")
         else:
             self.pedalboard_empty    = False
