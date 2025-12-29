@@ -1740,6 +1740,9 @@ class SnapshotSaveAs(JsonRequestHandler):
 
         yield gen.Task(SESSION.host.hmi_report_ss_name_if_current, idx)
 
+        # Send WebSocket message to notify clients (e.g., pistomp) of the new snapshot
+        SESSION.host.msg_callback("pedal_snapshot %d %s" % (idx, title))
+
         self.write({
             'ok': idx is not None,
             'id': idx,
