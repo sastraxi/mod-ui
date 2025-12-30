@@ -356,6 +356,8 @@ class Host(object):
         self.connections = []
         self.audioportsIn = []
         self.audioportsOut = []
+        self.audioportsInFull = []  # Full JACK port names (client:port) for connections
+        self.audioportsOutFull = []  # Full JACK port names (client:port) for connections
         self.cvportsIn = []
         self.cvportsOut = []
         self.midiports = [] # [symbol, alias, pending-connections]
@@ -1138,6 +1140,8 @@ class Host(object):
     def init_jack(self):
         self.audioportsIn  = []
         self.audioportsOut = []
+        self.audioportsInFull  = []
+        self.audioportsOutFull = []
         self.cvportsIn  = []
         self.cvportsOut = []
 
@@ -1153,14 +1157,23 @@ class Host(object):
                 self.cvportsIn.append(cv_port_name)
                 self.addressings.add_hw_cv_port('/cv/graph/' + cv_port_name)
             else:
+                # Store port name for HMI and UI symbol mapping
                 self.audioportsIn.append(port_name)
+                # Store full port name (client:port) for JACK connections
+                self.audioportsInFull.append(port)
+
+        print(f"[USB_DEBUG] audioportsIn: {self.audioportsIn}")
+        print(f"[USB_DEBUG] audioportsInFull: {self.audioportsInFull}")
 
         for port in get_jack_hardware_ports(True, True):
             client_name, port_name = port.split(":",1)
             if client_name == "mod-jack2spi":
                 self.cvportsOut.append(CV_PREFIX + port_name)
             else:
+                # Store port name for HMI and UI symbol mapping
                 self.audioportsOut.append(port_name)
+                # Store full port name (client:port) for JACK connections
+                self.audioportsOutFull.append(port)
 
         for port in get_jack_hardware_ports(False, True):
             if not port.startswith("system:midi_"):
@@ -3398,11 +3411,35 @@ class Host(object):
             if data[2] == "cv_exp_pedal":
                 return "mod-spi2jack:exp_pedal"
 
-            # Handle global input (for noisegate control)
-            if data[2] == "capture_1":
-                return self.jack_hw_capture_prefix + "1"
-            if data[2] == "capture_2":
-                return self.jack_hw_capture_prefix + "2"
+            # Handle audio capture ports (including USB audio interfaces)
+            if data[2].startswith("capture_"):
+                print(f"[USB_DEBUG] Handling capture port: {data[2]}")
+                try:
+                    port_num = int(data[2].replace("capture_", ""))
+                    port_index = port_num - 1  # Convert to zero-indexed
+                    print(f"[USB_DEBUG] port_num={port_num}, port_index={port_index}, audioportsInFull={self.audioportsInFull}")
+                    if 0 <= port_index < len(self.audioportsInFull):
+                        result = self.audioportsInFull[port_index]
+                        print(f"[USB_DEBUG] Returning mapped port: {result}")
+                        return result
+                except (ValueError, IndexError) as e:
+                    print(f"[USB_DEBUG] Exception: {e}")
+                    pass
+                # Fallback for old behavior (noisegate control)
+                if data[2] == "capture_1":
+                    return self.jack_hw_capture_prefix + "1"
+                if data[2] == "capture_2":
+                    return self.jack_hw_capture_prefix + "2"
+
+            # Handle audio playback ports
+            if data[2].startswith("playback_"):
+                try:
+                    port_num = int(data[2].replace("playback_", ""))
+                    port_index = port_num - 1  # Convert to zero-indexed
+                    if 0 <= port_index < len(self.audioportsOutFull):
+                        return self.audioportsOutFull[port_index]
+                except (ValueError, IndexError):
+                    pass
 
             # Default guess
             return "system:%s" % data[2]

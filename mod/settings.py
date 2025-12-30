@@ -122,3 +122,15 @@ PATCHSTORAGE_TARGET_ID=os.environ.get('PATCHSTORAGE_TARGET_ID', 5037)
 BLOKAS_ENABLED=bool(int(os.environ.get('BLOKAS_ENABLED', True)))
 BLOKAS_APT_PACKAGE=os.environ.get('BLOKAS_APT_PACKAGE', 'modep-mod-ui')
 BLOKAS_UPDATE_CHECK_URL=os.environ.get('BLOKAS_UPDATE_CHECK_URL', 'https://blokas.io/modep/version/v1/')
+
+# Settings for additional audio interfaces (USB audio, etc.)
+# These patterns are used to discover non-physical JACK ports that should appear in the hardware routing UI
+ADDITIONAL_JACK_CAPTURE_PATTERNS = [p for p in os.environ.get(
+    'MOD_ADDITIONAL_CAPTURE_PATTERNS',
+    'USB_In:'
+).split(',') if p]
+
+ADDITIONAL_JACK_PLAYBACK_PATTERNS = [p for p in os.environ.get(
+    'MOD_ADDITIONAL_PLAYBACK_PATTERNS',
+    ''
+).split(',') if p]

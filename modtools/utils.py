@@ -986,8 +986,99 @@ def has_midi_broadcaster_input_port():
 def has_duox_split_spdif():
     return bool(utils.has_duox_split_spdif())
 
-def get_jack_hardware_ports(isAudio, isOutput):
+def _get_jack_hardware_ports_native(isAudio, isOutput):
+    """Native C function to get physical hardware ports"""
     return charPtrPtrToStringList(utils.get_jack_hardware_ports(isAudio, isOutput))
+
+def get_jack_hardware_ports(isAudio, isOutput):
+    """
+    Get JACK hardware ports, including both physical ports and additional
+    USB audio interface ports (like USB_In:*).
+    """
+    # Get physical ports from native code
+    ports = _get_jack_hardware_ports_native(isAudio, isOutput)
+
+    # Add USB audio interface ports if audio input
+    if isAudio and not isOutput:
+        try:
+            from mod.settings import ADDITIONAL_JACK_CAPTURE_PATTERNS
+            import subprocess
+
+            for pattern in ADDITIONAL_JACK_CAPTURE_PATTERNS:
+                if pattern:
+                    # Query JACK for ports matching the pattern
+                    # Use jack_lsp to list ports, filter for outputs (which are capture sources)
+                    try:
+                        result = subprocess.run(
+                            ['jack_lsp', '-t'],
+                            capture_output=True,
+                            text=True,
+                            timeout=1
+                        )
+
+                        if result.returncode == 0:
+                            lines = result.stdout.strip().split('\n')
+                            current_port = None
+
+                            for line in lines:
+                                line = line.strip()
+                                if not line:
+                                    continue
+
+                                # Lines without leading whitespace are port names
+                                if not line.startswith(' ') and not line.startswith('\t'):
+                                    current_port = line
+                                # Lines with leading whitespace are properties
+                                elif current_port and 'output' in line.lower() and pattern in current_port:
+                                    # This is an output port (capture source) matching our pattern
+                                    if current_port not in ports:
+                                        ports.append(current_port)
+                                    current_port = None
+                    except (subprocess.TimeoutExpired, FileNotFoundError):
+                        pass  # jack_lsp not available or timed out
+        except ImportError:
+            pass  # ADDITIONAL_JACK_CAPTURE_PATTERNS not defined, skip
+
+    # Add USB audio interface ports if audio output
+    elif isAudio and isOutput:
+        try:
+            from mod.settings import ADDITIONAL_JACK_PLAYBACK_PATTERNS
+            import subprocess
+
+            for pattern in ADDITIONAL_JACK_PLAYBACK_PATTERNS:
+                if pattern:
+                    try:
+                        result = subprocess.run(
+                            ['jack_lsp', '-t'],
+                            capture_output=True,
+                            text=True,
+                            timeout=1
+                        )
+
+                        if result.returncode == 0:
+                            lines = result.stdout.strip().split('\n')
+                            current_port = None
+
+                            for line in lines:
+                                line = line.strip()
+                                if not line:
+                                    continue
+
+                                # Lines without leading whitespace are port names
+                                if not line.startswith(' ') and not line.startswith('\t'):
+                                    current_port = line
+                                # Lines with leading whitespace are properties
+                                elif current_port and 'input' in line.lower() and pattern in current_port:
+                                    # This is an input port (playback destination) matching our pattern
+                                    if current_port not in ports:
+                                        ports.append(current_port)
+                                    current_port = None
+                    except (subprocess.TimeoutExpired, FileNotFoundError):
+                        pass  # jack_lsp not available or timed out
+        except ImportError:
+            pass  # ADDITIONAL_JACK_PLAYBACK_PATTERNS not defined, skip
+
+    return ports
 
 def connect_jack_ports(port1, port2):
     return bool(utils.connect_jack_ports(port1.encode("utf-8"), port2.encode("utf-8")))
