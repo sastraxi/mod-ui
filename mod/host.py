@@ -3055,8 +3055,7 @@ class Host(object):
         snapshot = self.snapshot_make(name)
         self.pedalboard_snapshots[idx] = snapshot
 
-        # Write snapshots to disk immediately so external tools (like piStomp blend mode)
-        # can detect the change and update their state
+        # Write snapshots to disk immediately so external tools can detect the change
         if self.pedalboard_path:
             self.save_state_snapshots(self.pedalboard_path)
 
