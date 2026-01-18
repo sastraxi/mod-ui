@@ -3182,18 +3182,21 @@ class Host(object):
                     logging.exception(e)
 
             if was_aborted or diffPreset:
+                # Always load the preset if it changed
+                if diffPreset:
+                    self.msg_callback("preset %s %s" % (instance, data['preset']))
+                    try:
+                        yield gen.Task(self.preset_load_gen_helper, instance, data['preset'], from_hmi, abort_catcher)
+                    except Exception as e:
+                        logging.exception(e)
+
+                # Update addressing if preset is mapped to hardware
                 try:
                     index = pluginData['mapPresets'].index(data['preset'])
                 except ValueError:
+                    # Preset not in mapPresets, no hardware addressing to update
                     pass
                 else:
-                    if diffPreset:
-                        self.msg_callback("preset %s %s" % (instance, data['preset']))
-                        try:
-                            yield gen.Task(self.preset_load_gen_helper, instance, data['preset'], from_hmi, abort_catcher)
-                        except Exception as e:
-                            logging.exception(e)
-
                     addressing = pluginData['addressings'].get(":presets", None)
                     if addressing is not None:
                         addressing['value'] = index
