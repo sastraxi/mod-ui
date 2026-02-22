@@ -2696,7 +2696,13 @@ class Host(object):
     def param_set(self, port, value, callback):
         instance, symbol = port.rsplit("/", 1)
         instance_id = self.mapper.get_id_without_creating(instance)
-        pluginData  = self.plugins[instance_id]
+
+        try:
+            pluginData = self.plugins[instance_id]
+        except KeyError:
+            if callback is not None:
+                callback(False)
+            return
 
         if symbol in pluginData['designations']:
             print("ERROR: Trying to modify a specially designated port '%s', stop!" % symbol)
@@ -2714,8 +2720,15 @@ class Host(object):
 
     def patch_set(self, instance, paramuri, value, callback):
         instance_id = self.mapper.get_id_without_creating(instance)
-        pluginData  = self.plugins[instance_id]
-        parameter   = pluginData['parameters'].get(paramuri, None)
+
+        try:
+            pluginData = self.plugins[instance_id]
+        except KeyError:
+            if callback is not None:
+                callback(False)
+            return False
+
+        parameter = pluginData['parameters'].get(paramuri, None)
 
         if parameter is not None:
             parameter[0] = value
