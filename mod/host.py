@@ -2739,7 +2739,10 @@ class Host(object):
     
     def pi_stomp_param_get(self, port):
         instance, symbol = port.rsplit("/", 1)
-        instance_id = self.mapper.get_id_without_creating(instance)
+        try:
+            instance_id = self.mapper.get_id_without_creating(instance)
+        except KeyError:
+            return None
         pluginData  = self.plugins[instance_id]
 
         if symbol == ":bypass":
