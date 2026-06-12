@@ -2696,7 +2696,13 @@ class Host(object):
     def param_set(self, port, value, callback):
         instance, symbol = port.rsplit("/", 1)
         instance_id = self.mapper.get_id_without_creating(instance)
-        pluginData  = self.plugins[instance_id]
+
+        try:
+            pluginData = self.plugins[instance_id]
+        except KeyError:
+            if callback is not None:
+                callback(False)
+            return
 
         if symbol in pluginData['designations']:
             print("ERROR: Trying to modify a specially designated port '%s', stop!" % symbol)
@@ -2714,8 +2720,15 @@ class Host(object):
 
     def patch_set(self, instance, paramuri, value, callback):
         instance_id = self.mapper.get_id_without_creating(instance)
-        pluginData  = self.plugins[instance_id]
-        parameter   = pluginData['parameters'].get(paramuri, None)
+
+        try:
+            pluginData = self.plugins[instance_id]
+        except KeyError:
+            if callback is not None:
+                callback(False)
+            return False
+
+        parameter = pluginData['parameters'].get(paramuri, None)
 
         if parameter is not None:
             parameter[0] = value
@@ -2726,7 +2739,10 @@ class Host(object):
     
     def pi_stomp_param_get(self, port):
         instance, symbol = port.rsplit("/", 1)
-        instance_id = self.mapper.get_id_without_creating(instance)
+        try:
+            instance_id = self.mapper.get_id_without_creating(instance)
+        except KeyError:
+            return None
         pluginData  = self.plugins[instance_id]
 
         if symbol == ":bypass":
@@ -3054,6 +3070,11 @@ class Host(object):
         name     = self.pedalboard_snapshots[idx]['name']
         snapshot = self.snapshot_make(name)
         self.pedalboard_snapshots[idx] = snapshot
+
+        # Write snapshots to disk immediately so external tools can detect the change
+        if self.pedalboard_path:
+            self.save_state_snapshots(self.pedalboard_path)
+
         return True
 
     def snapshot_saveas(self, name):
@@ -3177,18 +3198,21 @@ class Host(object):
                     logging.exception(e)
 
             if was_aborted or diffPreset:
+                # Always load the preset if it changed
+                if diffPreset:
+                    self.msg_callback("preset %s %s" % (instance, data['preset']))
+                    try:
+                        yield gen.Task(self.preset_load_gen_helper, instance, data['preset'], from_hmi, abort_catcher)
+                    except Exception as e:
+                        logging.exception(e)
+
+                # Update addressing if preset is mapped to hardware
                 try:
                     index = pluginData['mapPresets'].index(data['preset'])
                 except ValueError:
+                    # Preset not in mapPresets, no hardware addressing to update
                     pass
                 else:
-                    if diffPreset:
-                        self.msg_callback("preset %s %s" % (instance, data['preset']))
-                        try:
-                            yield gen.Task(self.preset_load_gen_helper, instance, data['preset'], from_hmi, abort_catcher)
-                        except Exception as e:
-                            logging.exception(e)
-
                     addressing = pluginData['addressings'].get(":presets", None)
                     if addressing is not None:
                         addressing['value'] = index

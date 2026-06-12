@@ -1365,14 +1365,29 @@ class ServerWebSocket(websocket.WebSocketHandler):
         elif cmd == "transport-bpb":
             bpb = float(data[1])
             SESSION.host.set_transport_bpb(bpb, True, True, False, False)
+            SESSION.msg_callback_broadcast(
+                "transport %i %f %f %s" % (SESSION.host.transport_rolling,
+                                           SESSION.host.transport_bpb,
+                                           SESSION.host.transport_bpm,
+                                           SESSION.host.transport_sync), self)
 
         elif cmd == "transport-bpm":
             bpm = float(data[1])
             SESSION.host.set_transport_bpm(bpm, True, True, False, False)
+            SESSION.msg_callback_broadcast(
+                "transport %i %f %f %s" % (SESSION.host.transport_rolling,
+                                           SESSION.host.transport_bpb,
+                                           SESSION.host.transport_bpm,
+                                           SESSION.host.transport_sync), self)
 
         elif cmd == "transport-rolling":
             rolling = bool(int(data[1]))
             SESSION.host.set_transport_rolling(rolling, True, True, False, False)
+            SESSION.msg_callback_broadcast(
+                "transport %i %f %f %s" % (SESSION.host.transport_rolling,
+                                           SESSION.host.transport_bpb,
+                                           SESSION.host.transport_bpm,
+                                           SESSION.host.transport_sync), self)
 
         elif cmd == "show_external_ui":
             inst = data[1]
@@ -1739,6 +1754,9 @@ class SnapshotSaveAs(JsonRequestHandler):
         title = SESSION.host.snapshot_name(idx)
 
         yield gen.Task(SESSION.host.hmi_report_ss_name_if_current, idx)
+
+        # Send WebSocket message to notify clients (e.g., pistomp) of the new snapshot
+        SESSION.host.msg_callback("pedal_snapshot %d %s" % (idx, title))
 
         self.write({
             'ok': idx is not None,

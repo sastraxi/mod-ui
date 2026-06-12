@@ -4,6 +4,7 @@
 
 import os
 import subprocess
+import sys
 
 from tornado.ioloop import IOLoop
 from mod.settings import HTML_DIR, DEV_ENVIRONMENT, DEVICE_KEY, CACHE_DIR
@@ -20,7 +21,7 @@ def generate_screenshot(bundle_path, callback):
         pass
 
     cwd = os.path.abspath(os.path.join(os.path.dirname(__file__), '../'))
-    cmd = ['python3', '-m', 'modtools.pedalboard', 'take_screenshot', bundle_path, HTML_DIR, CACHE_DIR]
+    cmd = [sys.executable, '-m', 'modtools.pedalboard', 'take_screenshot', bundle_path, HTML_DIR, CACHE_DIR]
     if not DEV_ENVIRONMENT and DEVICE_KEY:  # if using a real MOD, setup niceness
         cmd = ['/usr/bin/nice', '-n', '+34'] + cmd
 
