@@ -181,6 +181,19 @@ QUICK_BYPASS_MODE_VALUES = (
 DEFAULT_DISPLAY_BRIGHTNESS = DISPLAY_BRIGHTNESS_50
 DEFAULT_QUICK_BYPASS_MODE  = QUICK_BYPASS_MODE_BOTH
 
+# Output clipping indicators.
+# mod-host does the high-rate peak diffing in its RT thread and only emits
+# `audio_clip <port> <0|1>` on boolean transitions; mod-ui forwards those to
+# clients as `clip_status <label> <0|1>`. See docs/output-clipping.md.
+CLIP_THRESHOLD  = 0.999  # knob 1: linear peak (~0 dBFS) that counts as clipping
+CLIP_HOLD_MS    = 250    # knob 2: ms below threshold before the indicator clears
+CLIP_RESEND_SEC = 5.0    # knob 4: periodic re-broadcast to heal out-of-sync clients
+# knob 5: which JACK ports to watch, mapped to the label sent to clients.
+CLIP_MONITORS = (
+    ("mod-monitor:out_1", "out_1"),
+    ("mod-monitor:out_2", "out_2"),
+)
+
 # Special URI for non-addressed controls
 kNullAddressURI = "null"
 
@@ -346,6 +359,11 @@ class Host(object):
         self.web_connected = False
         self.web_data_ready_counter = 0
         self.web_data_ready_ok = True
+
+        # Output clipping state: jack port name -> bool (last-known clipping).
+        self.clip_state = dict((port, False) for port, _ in CLIP_MONITORS)
+        self.clip_labels = dict(CLIP_MONITORS)
+        self.cliptimer = PeriodicCallback(self.clip_heal_callback, int(CLIP_RESEND_SEC * 1000))
 
         self.alluserpedalboards = None
         self.allfactorypedalboards = None
@@ -1082,6 +1100,13 @@ class Host(object):
 
         # Set directory for temporary data
         self.send_notmodified("state_tmpdir {}".format(PEDALBOARD_TMP_DIR))
+
+        # Setup output clipping indicators. These tap stable system ports
+        # (mod-monitor:out_*), so they persist across pedalboard changes and
+        # only need to be enabled once. mod-host diffs and reports transitions.
+        for port, _ in CLIP_MONITORS:
+            self.send_notmodified("monitor_audio_clip %s 1 %f %d" % (port, CLIP_THRESHOLD, CLIP_HOLD_MS))
+        self.cliptimer.start()
 
         # get current transport data
         data = get_jack_data(True)
@@ -1841,6 +1866,16 @@ class Host(object):
             elif ltype == PLUGIN_LOG_ERROR:
                 logging.error("[plugin] %s", lmsg)
 
+        elif cmd == "audio_clip":
+            # Name-keyed: "audio_clip <jack-port> <0|1>". mod-host has already
+            # done the diffing, so this only fires on transitions.
+            port, val = data.rsplit(" ", 1)
+            clipping = bool(int(val))
+            if self.clip_state.get(port) != clipping:
+                self.clip_state[port] = clipping
+                label = self.clip_labels.get(port, port)
+                self.msg_callback("clip_status %s %d" % (label, int(clipping)))
+
         else:
             logging.error("[host] unrecognized command: %s", cmd)
 
@@ -2003,6 +2038,8 @@ class Host(object):
                                                            self.transport_bpm,
                                                            self.transport_sync))
         websocket.write_message("truebypass %i %i" % (self.last_true_bypass_left, self.last_true_bypass_right))
+        for port, clipping in self.clip_state.items():
+            websocket.write_message("clip_status %s %d" % (self.clip_labels.get(port, port), int(clipping)))
         websocket.write_message("loading_start %d %d" % (int(self.pedalboard_empty), int(self.pedalboard_modified)))
         websocket.write_message("size %d %d" % (self.pedalboard_size[0], self.pedalboard_size[1]))
 
@@ -2025,6 +2062,10 @@ class Host(object):
                 self.send_notmodified("monitor_midi_program %d 1" % (midi_ss_prgch-1))
             self.send_notmodified("state_tmpdir {}".format(PEDALBOARD_TMP_DIR))
             self.send_notmodified("transport %i %f %f" % (self.transport_rolling, self.transport_bpb, self.transport_bpm))
+            # Re-register clipping monitors lost with the crashed mod-host.
+            for port in self.clip_state:
+                self.clip_state[port] = False
+                self.send_notmodified("monitor_audio_clip %s 1 %f %d" % (port, CLIP_THRESHOLD, CLIP_HOLD_MS))
             self.addressings.cchain.restart_if_crashed()
 
             if self.transport_sync == "link":
@@ -4795,6 +4836,13 @@ _:b%i
     def statstimer_callback(self):
         data = get_jack_data(False)
         self.msg_callback("stats %0.1f %i" % (data['cpuLoad'], data['xruns']))
+
+    def clip_heal_callback(self):
+        # Periodically re-broadcast last-known clip state so clients that
+        # joined late or missed a transition get healed. Reads in-memory
+        # state only; never touches the mod-host read socket.
+        for port, clipping in self.clip_state.items():
+            self.msg_callback("clip_status %s %d" % (self.clip_labels.get(port, port), int(clipping)))
 
     def get_free_memory_value(self):
         if not self.memfile:
