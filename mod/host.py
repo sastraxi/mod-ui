@@ -2678,8 +2678,13 @@ class Host(object):
     # Host stuff - plugin values
 
     def bypass(self, instance, bypassed, callback):
-        instance_id = self.mapper.get_id_without_creating(instance)
-        pluginData  = self.plugins[instance_id]
+        try:
+            instance_id = self.mapper.get_id_without_creating(instance)
+            pluginData  = self.plugins[instance_id]
+        except KeyError:
+            if callback is not None:
+                callback(False)
+            return
 
         pluginData['bypassed'] = bypassed
         self.send_modified("bypass %d %d" % (instance_id, int(bypassed)), callback, datatype='boolean')
@@ -2695,7 +2700,12 @@ class Host(object):
 
     def param_set(self, port, value, callback):
         instance, symbol = port.rsplit("/", 1)
-        instance_id = self.mapper.get_id_without_creating(instance)
+        try:
+            instance_id = self.mapper.get_id_without_creating(instance)
+        except KeyError:
+            if callback is not None:
+                callback(False)
+            return
 
         try:
             pluginData = self.plugins[instance_id]

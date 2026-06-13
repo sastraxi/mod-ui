@@ -236,6 +236,11 @@ class Session(object):
     # A new webbrowser page has been open
     # We need to cache its socket address and send any msg callbacks to it
     def websocket_opened(self, ws, callback):
+        # Pi-stomp connects from localhost; browsers come from LAN IPs.
+        # Local clients don't need real-time audio meters or data_ready flow control.
+        if ws.request.remote_ip in ('127.0.0.1', '::1'):
+            ws._is_local = True
+
         def ready(_):
             self.websockets.append(ws)
             self.host.open_connection_if_needed(ws)
@@ -412,9 +417,24 @@ class Session(object):
     # TODO
     # Everything after this line is yet to be documented
 
+    # See docs/output-data-flow.md for the full data_finish / output_data_ready
+    # handshake and the _is_local local-client optimization.
     def msg_callback(self, msg):
+        is_meter = msg.startswith(("output_set ", "data_ready "))
+        any_non_local_received = False
         for ws in self.websockets:
+            if is_meter and getattr(ws, '_is_local', False):
+                continue
             ws.write_message(msg)
+            any_non_local_received = True
+
+        # If data_ready was suppressed for every connected client (all are local/privileged),
+        # mirror what ws_data_ready does: acknowledge and send output_data_ready back to
+        # mod-host so its feedback loop stays unblocked (bypass param_set echoes flow through
+        # the same channel and would stall otherwise).
+        if msg.startswith("data_ready ") and not any_non_local_received:
+            self.host.web_data_ready_ok = True
+            self.host.send_output_data_ready(None, None)
 
     def msg_callback_broadcast(self, msg, ws2):
         for ws in self.websockets:
