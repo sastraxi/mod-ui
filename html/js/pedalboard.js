@@ -243,6 +243,11 @@ JqueryClass('pedalboard', {
         // if first time to adapt
         self.data('adaptFirstTime', true)
 
+        // Gate non-forced scheduleAdapt calls until the pedalboard load completes.
+        // Re-armed on every loading_start (host.js) and cleared in the
+        // pedalboardFinishedLoading callback below, once the load truly finishes.
+        self.data('bulkLoading', true)
+
         // widgets on the arrive list
         self.data('callbacksToArrive', {})
 
@@ -1181,6 +1186,13 @@ JqueryClass('pedalboard', {
             return
         }
 
+        // During bulk pedalboard load, suppress all non-forced calls. modgui.js fires
+        // scheduleAdapt(false) for every knob widget's getAndSetSize, which saturates
+        // the drain timer to ~500 and adds ~5s of delay before pedalboardFinishedLoading.
+        if (!forcedUpdate && self.data('bulkLoading')) {
+            return
+        }
+
         if (forcedUpdate) {
             self.data('adaptForcedUpdate', true)
         }
@@ -1209,6 +1221,11 @@ JqueryClass('pedalboard', {
                 self.data('adaptTime', 0)
                 self.pedalboard('positionHardwarePorts')
                 self.data('pedalboardFinishedLoading')(function () {
+                    // Keep the gate closed until the load truly completes (search /
+                    // effect-list returned), so late async modgui knob renders can't
+                    // re-saturate the drain timer. Clearing it here instead of when the
+                    // 400ms forced-adapt window drains is what keeps startup fast.
+                    self.data('bulkLoading', false)
                     self.pedalboard('adapt', forcedUpdate)
                     self.data('wait').stopIfNeeded()
                 })
@@ -1227,7 +1244,9 @@ JqueryClass('pedalboard', {
 
         if (curTime == 0) {
             // first time, setup everything
-            self.data('adaptTime', firstTime ? 201 : 101)
+            // During bulk load the gate suppresses all bumps, so we only need a short
+            // settle window (21 × 200ms = ~400ms) instead of the usual 201/101.
+            self.data('adaptTime', self.data('bulkLoading') ? 21 : (firstTime ? 201 : 101))
             setTimeout(callAdaptLater, 1)
         } else if (curTime < 500) {
             // not first time, increase timer

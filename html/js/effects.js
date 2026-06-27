@@ -142,6 +142,25 @@ JqueryClass('effectBox', {
             self.effectBox('setCategory', 'All')
         }
 
+        // IntersectionObserver with root=#plugins-results so images are only fetched
+        // when they actually enter the clipped viewport of the horizontal strip, not
+        // when they're merely present in the DOM off to the side.
+        var pluginsResults = self.find('#plugins-results')[0]
+        var thumbnailObserver = new IntersectionObserver(function (entries) {
+            for (var i = 0; i < entries.length; i++) {
+                if (entries[i].isIntersecting) {
+                    var img = entries[i].target
+                    img.src = img.getAttribute('data-src')
+                    thumbnailObserver.unobserve(img)
+                }
+            }
+        }, {
+            root: pluginsResults,
+            rootMargin: '0px 300px 0px 300px',
+            threshold: 0
+        })
+        self.data('thumbnailObserver', thumbnailObserver)
+
         // don't search just yet.
         // it's a little expensive, let init time go for loading the pedalboard first
         self.effectBox('showPlugins', [])
@@ -235,6 +254,8 @@ JqueryClass('effectBox', {
 
     showPlugins: function (plugins, callback) {
         var self = $(this)
+        // Release all observed img elements before cleanResults wipes them from the DOM.
+        self.data('thumbnailObserver').disconnect()
         self.effectBox('cleanResults')
         plugins.sort(function (a, b) {
             a = a.label.toLowerCase()
@@ -395,6 +416,9 @@ JqueryClass('effectBox', {
         } else {
             container.append(rendered)
         }
+
+        var img = rendered.find('img[data-src]')[0]
+        if (img) self.data('thumbnailObserver').observe(img)
 
         var index = self.data('index')
         if (!index[plugin.uri])

@@ -76,6 +76,9 @@ class GlobalWebServerState(object):
 gState = GlobalWebServerState()
 gState.favorites = []
 
+# Cached result of get_all_plugins() / EffectList. Invalidated on plugin install or removal.
+_plugins_list_cache = None
+
 @gen.coroutine
 def install_bundles_in_tmp_dir(options, callback):
     error     = ""
@@ -159,6 +162,8 @@ def install_bundles_in_tmp_dir(options, callback):
         }
 
     os.sync()
+    global _plugins_list_cache
+    _plugins_list_cache = None
     callback(resp)
 
 def run_command(args, cwd, callback):
@@ -860,8 +865,10 @@ class EffectBulk(JsonRequestHandler):
 
 class EffectList(JsonRequestHandler):
     def get(self):
-        data = get_all_plugins()
-        self.write(data)
+        global _plugins_list_cache
+        if _plugins_list_cache is None:
+            _plugins_list_cache = get_all_plugins()
+        self.write(_plugins_list_cache)
 
 class SDKEffectInstaller(EffectInstaller):
     def set_default_headers(self):
@@ -1458,6 +1465,8 @@ class PackageUninstall(JsonRequestHandler):
             if len(broken) > 0:
                 list_banks(broken)
                 reset_get_all_pedalboards_cache(kPedalboardInfoBoth)
+            global _plugins_list_cache
+            _plugins_list_cache = None
 
         self.write(resp)
 

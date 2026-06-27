@@ -5,7 +5,8 @@ var ws
 var cached_cpuLoad = null,
     cached_xruns   = null,
     timeout_xruns  = null,
-    pb_loading     = true
+    pb_loading     = true,
+    pendingPlugins = null
 
 $('document').ready(function() {
     ws = new WebSocket("ws://" + window.location.host + "/websocket")
@@ -363,30 +364,38 @@ $('document').ready(function() {
             if (plugins[instance] == null) {
                 plugins[instance] = {} // register plugin
 
-                $.ajax({
-                    url: '/effect/get',
-                    data: {
-                        uri: uri,
-                        version: VERSION,
-                        plugin_version: pVersion,
-                    },
-                    success: function (pluginData) {
-                        var instancekey = '[mod-instance="' + instance + '"]'
+                if (pendingPlugins !== null) {
+                    // Buffered path: collect during loading_start → loading_end window
+                    // and fetch all at once via /effect/bulk/ in the loading_end handler.
+                    pendingPlugins.push({ instance: instance, uri: uri, x: x, y: y,
+                                         bypassed: bypassed, skipModified: skipModified })
+                } else {
+                    // Live path (post-load plugin add): unchanged from original.
+                    $.ajax({
+                        url: '/effect/get',
+                        data: {
+                            uri: uri,
+                            version: VERSION,
+                            plugin_version: pVersion,
+                        },
+                        success: function (pluginData) {
+                            var instancekey = '[mod-instance="' + instance + '"]'
 
-                        if (!$(instancekey).length) {
-                            var cb = function () {
-                                desktop.pedalboard.pedalboard('scheduleAdapt', false)
-                                desktop.pedalboard.data('wait').stopPlugin(instance, !skipModified)
-                                $('#pedalboard-dashboard').unbindArrive(instancekey, cb)
+                            if (!$(instancekey).length) {
+                                var cb = function () {
+                                    desktop.pedalboard.pedalboard('scheduleAdapt', false)
+                                    desktop.pedalboard.data('wait').stopPlugin(instance, !skipModified)
+                                    $('#pedalboard-dashboard').unbindArrive(instancekey, cb)
+                                }
+                                $('#pedalboard-dashboard').arrive(instancekey, cb)
                             }
-                            $('#pedalboard-dashboard').arrive(instancekey, cb)
-                        }
 
-                        desktop.pedalboard.pedalboard("addPlugin", pluginData, instance, bypassed, x, y, {}, null, skipModified)
-                    },
-                    cache: offBuild,
-                    dataType: 'json'
-                })
+                            desktop.pedalboard.pedalboard("addPlugin", pluginData, instance, bypassed, x, y, {}, null, skipModified)
+                        },
+                        cache: offBuild,
+                        dataType: 'json'
+                    })
+                }
             }
             return
         }
@@ -495,7 +504,9 @@ $('document').ready(function() {
             data     = data.split(" ",2)
             empty    = parseInt(data[0]) != 0
             modified = parseInt(data[1]) != 0
-            pb_loading = true
+            pb_loading     = true
+            pendingPlugins = []
+            desktop.pedalboard.data('bulkLoading', true)
             desktop.pedalboard.data('wait').start('Loading pedalboard...')
             return
         }
@@ -503,29 +514,79 @@ $('document').ready(function() {
         if (cmd == "loading_end") {
             var snapshotId = parseInt(data)
 
-            $.ajax({
-                url: '/snapshot/name',
-                type: 'GET',
-                data: {
-                    id: snapshotId,
-                },
-                success: function (resp) {
-                    desktop.pedalboard.pedalboard('scheduleAdapt', true)
-                    desktop.pedalboardEmpty    = empty && !modified
-                    desktop.pedalboardModified = modified
-                    desktop.pedalboardPresetId = snapshotId
-                    desktop.pedalboardPresetName = resp.name
+            // Drain and close the buffer immediately; late `add` messages (live drops)
+            // will see pendingPlugins === null and take the per-plugin AJAX path.
+            var buffered   = pendingPlugins || []
+            pendingPlugins = null
 
-                    if (resp.ok) {
-                        desktop.titleBox.text((desktop.title || 'Untitled') + " - " + resp.name)
+            // Collect unique URIs for a single bulk fetch.
+            var uriSet = []
+            for (var i = 0; i < buffered.length; i++) {
+                if (uriSet.indexOf(buffered[i].uri) === -1) uriSet.push(buffered[i].uri)
+            }
+
+            // Wire arrive listener + addPlugin for one buffered entry.
+            // Named function avoids loop-closure variable capture bug.
+            function schedulePluginAdd(pluginData, p) {
+                var instancekey = '[mod-instance="' + p.instance + '"]'
+                if (!$(instancekey).length) {
+                    var cb = function () {
+                        desktop.pedalboard.pedalboard('scheduleAdapt', false)
+                        desktop.pedalboard.data('wait').stopPlugin(p.instance, !p.skipModified)
+                        $('#pedalboard-dashboard').unbindArrive(instancekey, cb)
                     }
+                    $('#pedalboard-dashboard').arrive(instancekey, cb)
+                }
+                desktop.pedalboard.pedalboard("addPlugin", pluginData, p.instance, p.bypassed, p.x, p.y, {}, null, p.skipModified)
+            }
 
-                    pb_loading = false
-                    desktop.init();
-                },
-                cache: false,
-                dataType: 'json'
-            })
+            // Run once both the bulk fetch and the snapshot name request resolve.
+            function finishLoading(bulkResult, resp) {
+                for (var i = 0; i < buffered.length; i++) {
+                    schedulePluginAdd(bulkResult[buffered[i].uri], buffered[i])
+                }
+                desktop.pedalboard.pedalboard('scheduleAdapt', true)
+                desktop.pedalboardEmpty      = empty && !modified
+                desktop.pedalboardModified   = modified
+                desktop.pedalboardPresetId   = snapshotId
+                desktop.pedalboardPresetName = resp.name
+                if (resp.ok) {
+                    desktop.titleBox.text((desktop.title || 'Untitled') + " - " + resp.name)
+                }
+                pb_loading = false
+                desktop.init()
+            }
+
+            if (uriSet.length === 0) {
+                // Empty pedalboard: skip bulk call, just fetch snapshot name.
+                $.ajax({
+                    url: '/snapshot/name',
+                    type: 'GET',
+                    data: { id: snapshotId },
+                    success: function (resp) { finishLoading({}, resp) },
+                    cache: false,
+                    dataType: 'json'
+                })
+            } else {
+                // Fire bulk plugin fetch and snapshot name request in parallel.
+                var doneCount = 0, bulkResult = null, snapResp = null
+                function checkBothDone() {
+                    if (++doneCount < 2) return
+                    finishLoading(bulkResult, snapResp)
+                }
+                desktop.getPluginsData(uriSet, function (result) {
+                    bulkResult = result
+                    checkBothDone()
+                })
+                $.ajax({
+                    url: '/snapshot/name',
+                    type: 'GET',
+                    data: { id: snapshotId },
+                    success: function (resp) { snapResp = resp; checkBothDone() },
+                    cache: false,
+                    dataType: 'json'
+                })
+            }
             return
         }
 
