@@ -1220,13 +1220,21 @@ JqueryClass('pedalboard', {
                 self.data('adaptForcedUpdate', false)
                 self.data('adaptTime', 0)
                 self.pedalboard('positionHardwarePorts')
+                // We've reached the proceed block, so the first drain finished and
+                // pedalboardFinishedLoading (below) fires /effect/list synchronously.
+                // Late knob bumps can no longer delay it, so the gate's job is done:
+                // clear it here, not 5s later in the post-search callback, so the user
+                // can interact the moment the spinner drops.
+                self.data('bulkLoading', false)
+                // The pedalboard itself is laid out now, so drop the loading overlay
+                // immediately. Don't chain it behind pedalboardFinishedLoading: that
+                // waits for the plugin-browser search to render ~130 plugins (several
+                // seconds). Boot-loaded plugins never populate the wait-plugins map,
+                // so stopIfNeeded() hides the spinner right away here.
+                self.data('wait').stopIfNeeded()
                 self.data('pedalboardFinishedLoading')(function () {
-                    // Keep the gate closed until the load truly completes (search /
-                    // effect-list returned), so late async modgui knob renders can't
-                    // re-saturate the drain timer. Clearing it here instead of when the
-                    // 400ms forced-adapt window drains is what keeps startup fast.
-                    self.data('bulkLoading', false)
                     self.pedalboard('adapt', forcedUpdate)
+                    // Fallback: if anything did register a wait-plugin, clear it here.
                     self.data('wait').stopIfNeeded()
                 })
 
