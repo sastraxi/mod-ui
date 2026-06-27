@@ -192,7 +192,7 @@ $('document').ready(function() {
 
             desktop.pedalboardPresetId = index
             desktop.pedalboardPresetName = name
-            desktop.titleBox.text((desktop.title || 'Untitled') + " - " + name)
+            desktop.setTitleBox((desktop.title || 'Untitled') + " - " + name)
             return
         }
 
@@ -512,7 +512,10 @@ $('document').ready(function() {
         }
 
         if (cmd == "loading_end") {
-            var snapshotId = parseInt(data)
+            var parts      = data.split(" ", 2)
+            var snapshotId = parseInt(parts[0])
+            var pbName     = parts.length > 1 ? data.substr(parts[0].length + 1) : ''
+            desktop.title  = pbName
 
             // Drain and close the buffer immediately; late `add` messages (live drops)
             // will see pendingPlugins === null and take the per-plugin AJAX path.
@@ -551,7 +554,7 @@ $('document').ready(function() {
                 desktop.pedalboardPresetId   = snapshotId
                 desktop.pedalboardPresetName = resp.name
                 if (resp.ok) {
-                    desktop.titleBox.text((desktop.title || 'Untitled') + " - " + resp.name)
+                    desktop.setTitleBox((desktop.title || 'Untitled') + " - " + resp.name)
                 }
                 pb_loading = false
                 desktop.init()
