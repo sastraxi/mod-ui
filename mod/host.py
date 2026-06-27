@@ -1603,6 +1603,12 @@ class Host(object):
                 self.web_data_ready_ok = False
                 self.web_data_ready_counter += 1
                 self.msg_callback("data_ready %i" % self.web_data_ready_counter)
+                # If msg_callback self-acknowledged (all clients were skipped), web_data_ready_ok
+                # is already True and no timer is needed. Otherwise, set a 50ms fallback so a
+                # backgrounded Chrome tab (that hasn't sent client_hidden yet) can't stall mod-host
+                # indefinitely — Chrome's JS throttles setTimeout to ~1s when backgrounded.
+                if not self.web_data_ready_ok and self.last_data_finish_handle is None:
+                    self.last_data_finish_handle = ioloop.call_later(0.15, self.send_output_data_ready_later)
                 return
 
             now  = ioloop.time()
@@ -1881,6 +1887,7 @@ class Host(object):
     def send_output_data_ready(self, now, callback):
         ioloop = IOLoop.instance()
         self.last_data_finish_msg = ioloop.time() if now is None else now
+        self.web_data_ready_ok = True
 
         if self.last_data_finish_handle is not None:
             ioloop.remove_timeout(self.last_data_finish_handle)

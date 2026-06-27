@@ -1317,7 +1317,18 @@ class ServerWebSocket(websocket.WebSocketHandler):
 
         if cmd == "data_ready":
             counter = int(data[1])
-            SESSION.ws_data_ready(counter)
+            SESSION.ws_data_ready(counter, self)
+            return
+
+        elif cmd == "client_hidden":
+            print("[ws] client_hidden from %s" % self.request.remote_ip, flush=True)
+            self._is_background = True
+            return
+
+        elif cmd == "client_visible":
+            print("[ws] client_visible from %s" % self.request.remote_ip, flush=True)
+            self._is_background = False
+            self._meter_ready = True
             return
 
         elif cmd == "param_set":

@@ -44,7 +44,12 @@ if msg == "data_finish":
         self.web_data_ready_ok = False
         self.web_data_ready_counter += 1
         self.msg_callback("data_ready %i" % counter)
-        return                      # wait for client echo
+        # Start a 150ms fallback timer in case no client acks in time.
+        # msg_callback sets web_data_ready_ok = True if it self-acknowledged,
+        # so the timer is only armed when a real ack is still outstanding.
+        if not self.web_data_ready_ok and self.last_data_finish_handle is None:
+            self.last_data_finish_handle = ioloop.call_later(0.15, self.send_output_data_ready_later)
+        return
     else:
         yield gen.Task(self.send_output_data_ready, now)   # no client: use timer
 ```
@@ -52,19 +57,26 @@ if msg == "data_finish":
 ### Client echo path (`session.py: ws_data_ready`)
 
 ```python
-def ws_data_ready(self, counter):
-    if self.host.web_data_ready_counter == counter:
+def ws_data_ready(self, counter, ws):
+    ws._meter_ready = True
+    # Guard: if the 150ms timer already fired, web_data_ready_ok is True —
+    # skip to avoid sending a second output_data_ready to mod-host.
+    if self.host.web_data_ready_counter == counter and not self.host.web_data_ready_ok:
         self.host.web_data_ready_ok = True
-        self.host.send_output_data_ready(None, None)   # sends output_data_ready to mod-host
+        self.host.send_output_data_ready(None, None)
 ```
 
 ### `send_output_data_ready` (`host.py`)
 
 ```python
 def send_output_data_ready(self, now, callback):
+    self.web_data_ready_ok = True   # mark as done before sending
     ...
     self.send_notmodified("output_data_ready", callback)   # write socket → mod-host
 ```
+
+`web_data_ready_ok` is set here (rather than only in `ws_data_ready`) so that if the
+150ms timer fires first, any subsequent browser ack is a no-op.
 
 ## Local Client Optimization (`_is_local`)
 
@@ -80,17 +92,93 @@ connected client, self-acknowledge immediately — mirroring what a real browser
 would do:
 
 ```python
-if msg.startswith("data_ready ") and not any_non_local_received:
+if is_data_ready and not any_non_local_received:
     self.host.web_data_ready_ok = True
     self.host.send_output_data_ready(None, None)
 ```
 
-When a browser is also open (LAN IP → not `_is_local`), it receives `data_ready`
-normally, echoes back, and the real handshake runs. The self-acknowledge only fires
-when pi-stomp is the sole client.
+## Backgrounded Browser Tabs (`_is_background`, `_meter_ready`)
+
+A Chrome tab in the background throttles its JS timers to ~1 Hz. Without mitigation,
+one backgrounded tab stalls the entire meter loop: it receives `data_ready N` but
+doesn't echo for ~1 second, blocking `output_data_ready` and all `param_set` echoes
+(including footswitch feedback to pi-stomp).
+
+Two mechanisms work together to prevent this.
+
+### Explicit visibility signal (`_is_background`)
+
+When the browser page becomes hidden, the JS `visibilitychange` listener sends a
+WebSocket message:
+
+```javascript
+document.addEventListener('visibilitychange', function () {
+    if (ws.readyState === WebSocket.OPEN) {
+        ws.send(document.hidden ? 'client_hidden' : 'client_visible')
+    }
+})
+```
+
+`webserver.py` sets/clears `ws._is_background` on receipt. In `msg_callback`, a
+client with `_is_background = True` is skipped for both `output_set` and `data_ready`:
+
+```python
+elif is_output_set:
+    if getattr(ws, '_is_background', False) or not getattr(ws, '_meter_ready', True):
+        continue
+elif is_data_ready:
+    if getattr(ws, '_is_background', False) or not getattr(ws, '_meter_ready', True):
+        continue
+    ws._meter_ready = False
+```
+
+When all non-local clients are skipped this way, `any_non_local_received` stays
+`False` and the self-acknowledge fires immediately — zero added latency.
+
+When `client_visible` arrives, the server sets `_is_background = False` and
+`_meter_ready = True`, and the client re-enters the normal handshake on the next frame.
+
+### Per-client pending-ack gate (`_meter_ready`)
+
+Each client carries a `_meter_ready` flag (default `True`). It is cleared when
+`data_ready N` is sent to that client, and restored when the client echoes back.
+A client with `_meter_ready = False` is skipped in `msg_callback`, the same as a
+backgrounded client.
+
+This covers a gradual slowdown that doesn't trigger `visibilitychange` (e.g., a
+foreground tab under heavy CPU load that is simply lagging its echo).
+
+### 150ms fallback timer
+
+`_is_background` relies on the browser sending `client_hidden` before the next
+`data_finish` arrives. This is not guaranteed: there is a race between Chrome's
+`visibilitychange` event and mod-host's next frame. To bound the worst case,
+`host.py` arms a 150ms timer after each `data_ready N` dispatch, but only when
+`web_data_ready_ok` is still `False` (i.e., `msg_callback` didn't self-acknowledge):
+
+```
+t=0      data_ready N sent to Chrome, timer armed for t=150ms
+t=50ms   Chrome (foreground) echoes back → ws_data_ready clears timer, output_data_ready sent
+t=150ms  timer fires only if Chrome hasn't echoed → output_data_ready sent, stall bounded
+```
+
+150ms is chosen to be safely above Chrome's 50ms JS echo debounce (`triggerDelayedReadyResponse`),
+so the timer never races a foreground ack in normal operation. When `client_hidden` is
+working, the timer is never armed (self-acknowledge fires in `msg_callback`).
+
+### Double-send protection
+
+Both `send_output_data_ready` and the `ws_data_ready` echo path converge on the same
+send. The `web_data_ready_ok` flag prevents a second `output_data_ready` from being
+sent if both fire in the same IOLoop turn:
+
+- `send_output_data_ready` sets `web_data_ready_ok = True` before sending.
+- `ws_data_ready` checks `not web_data_ready_ok` before calling `send_output_data_ready`.
 
 ## Why the Browser Throttles
 
-The browser JavaScript delays its echo by 25 ms before sending `data_ready` back.
-This caps the `output_set` update rate at ~40 fps, preventing DOM update starvation
-on pedalboards with many parameters.
+The browser JavaScript delays its echo by 50 ms before sending `data_ready` back
+(`triggerDelayedReadyResponse` in `host.js`). This caps the `output_set` update rate
+at ~20 fps, preventing DOM update starvation on pedalboards with many parameters.
+Each new `data_ready` resets the debounce timer, so only the most recent counter is
+ever echoed.

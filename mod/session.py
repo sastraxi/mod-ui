@@ -319,8 +319,11 @@ class Session(object):
 
     # Receive data ready, with matching counter value
     # This indicates web browser side is ready to receive more events
-    def ws_data_ready(self, counter):
-        if self.host.web_data_ready_counter == counter:
+    def ws_data_ready(self, counter, ws):
+        ws._meter_ready = True
+        # Guard: if the timer already fired and sent output_data_ready, web_data_ready_ok
+        # is True — don't send a second one to mod-host.
+        if self.host.web_data_ready_counter == counter and not self.host.web_data_ready_ok:
             self.host.web_data_ready_ok = True
             self.host.send_output_data_ready(None, None)
 
@@ -420,19 +423,31 @@ class Session(object):
     # See docs/output-data-flow.md for the full data_finish / output_data_ready
     # handshake and the _is_local local-client optimization.
     def msg_callback(self, msg):
-        is_meter = msg.startswith(("output_set ", "data_ready "))
+        is_output_set = msg.startswith("output_set ")
+        is_data_ready = msg.startswith("data_ready ")
         any_non_local_received = False
         for ws in self.websockets:
-            if is_meter and getattr(ws, '_is_local', False):
-                continue
+            if getattr(ws, '_is_local', False):
+                if is_output_set or is_data_ready:
+                    continue
+            elif is_output_set:
+                if getattr(ws, '_is_background', False) or not getattr(ws, '_meter_ready', True):
+                    continue
+            elif is_data_ready:
+                # Skip backgrounded or slow clients so they can't stall mod-host.
+                # For backgrounded tabs the browser sends client_hidden which sets
+                # _is_background; the self-acknowledge below then fires immediately.
+                if getattr(ws, '_is_background', False) or not getattr(ws, '_meter_ready', True):
+                    continue
+                ws._meter_ready = False
             ws.write_message(msg)
-            any_non_local_received = True
+            if is_data_ready:
+                any_non_local_received = True
 
         # If data_ready was suppressed for every connected client (all are local/privileged),
         # mirror what ws_data_ready does: acknowledge and send output_data_ready back to
-        # mod-host so its feedback loop stays unblocked (bypass param_set echoes flow through
-        # the same channel and would stall otherwise).
-        if msg.startswith("data_ready ") and not any_non_local_received:
+        # mod-host so its feedback loop stays unblocked.
+        if is_data_ready and not any_non_local_received:
             self.host.web_data_ready_ok = True
             self.host.send_output_data_ready(None, None)
 

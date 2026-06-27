@@ -32,6 +32,12 @@ $('document').ready(function() {
         desktop && desktop.blockUI()
     }
 
+    document.addEventListener('visibilitychange', function () {
+        if (ws.readyState === WebSocket.OPEN) {
+            ws.send(document.hidden ? 'client_hidden' : 'client_visible')
+        }
+    })
+
     ws.onmessage = function (evt) {
         var data = evt.data
         var cmd = data.split(" ",1)
