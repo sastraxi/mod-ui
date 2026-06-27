@@ -202,7 +202,7 @@ function Desktop(elements) {
         pedalPresetsOverlay: elements.pedalPresetsOverlay,
         hardwareManager: self.hardwareManager,
         renamedCallback: function (name) {
-            self.titleBox.text((self.title || 'Untitled') + " - " + (name || 'Default'))
+            self.setTitleBox((self.title || 'Untitled') + " - " + (name || 'Default'))
         }
     })
 
@@ -1016,7 +1016,7 @@ function Desktop(elements) {
                     self.pedalboardPresetId = resp.id
                     self.pedalboardPresetName = resp.title
                     self.pedalboardModified = true
-                    self.titleBox.text((self.title || 'Untitled') + " - " + resp.title)
+                    self.setTitleBox((self.title || 'Untitled') + " - " + resp.title)
                     new Notification('info', 'Pedalboard snapshot saved', 2000)
                 },
                 error: function () {
@@ -1461,7 +1461,7 @@ Desktop.prototype.makePedalboard = function (el, effectBox) {
                     self.pedalboardPresetId = 0
                     self.pedalboardPresetName = ''
                     self.pedalboardDemoPluginsNotified = false
-                    self.titleBox.text('Untitled')
+                    self.setTitleBox('Untitled')
                     self.titleBox.addClass("blend")
                     self.transportControls.resetControlsEnabled()
 
@@ -1885,7 +1885,7 @@ Desktop.prototype.loadPedalboard = function (bundlepath, callback) {
                 self.pedalboardEmpty = false
                 self.pedalboardModified = false
                 self.pedalboardDemoPluginsNotified = false
-                self.titleBox.text(resp.name);
+                self.setTitleBox(resp.name);
                 self.titleBox.removeClass("blend");
 
                 callback(true)
@@ -1923,7 +1923,7 @@ Desktop.prototype.saveCurrentPedalboard = function (asNew, callback) {
             self.pedalboardBundle = errorOrPath
             self.pedalboardEmpty = false
             self.pedalboardModified = false
-            self.titleBox.text(title + " - " + self.pedalboardPresetName)
+            self.setTitleBox(title + " - " + self.pedalboardPresetName)
 
             if (self.previousPedalboardList != null) {
                 for (var i=0; i<self.previousPedalboardList.length; i++) {
@@ -1951,6 +1951,12 @@ Desktop.prototype.openPresetSaveWindow = function (windowTitle, name, callback) 
         function (ok, ignored, newName) {
             callback(newName)
         })
+}
+
+Desktop.prototype.setTitleBox = function (text) {
+    this.titleBox.text(text)
+    var base = BLOKAS_ENABLED === 'true' ? 'pi-Stomp' : 'MOD'
+    document.title = (text && text !== 'Untitled') ? base + ': ' + text : base
 }
 
 JqueryClass('saveBox', {
